@@ -1,6 +1,7 @@
 
 import React, { useState } from 'react';
-import { Download, RefreshCw, Plus, Trash2, Undo2, Redo2, Settings, X, Save, Info, FileText, ArrowRight, Brain, HelpCircle, Layers, Wand2, Layout } from 'lucide-react';
+import { Download, RefreshCw, Plus, Trash2, Undo2, Redo2, Settings, X, Save, Info, FileText, ArrowRight, Brain, HelpCircle, Layers, Wand2, Layout, History, Terminal } from 'lucide-react';
+import { PromptLog } from '../types';
 
 interface ToolbarProps {
   onAddRoot: () => void;
@@ -13,6 +14,7 @@ interface ToolbarProps {
   canRedo: boolean;
   systemInstruction: string;
   onUpdateInstruction: (val: string) => void;
+  promptLogs: PromptLog[];
 }
 
 const Toolbar: React.FC<ToolbarProps> = ({ 
@@ -25,19 +27,28 @@ const Toolbar: React.FC<ToolbarProps> = ({
   canUndo,
   canRedo,
   systemInstruction,
-  onUpdateInstruction
+  onUpdateInstruction,
+  promptLogs
 }) => {
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [tempInstruction, setTempInstruction] = useState(systemInstruction);
   const [activeTab, setActiveTab] = useState<'general' | 'transparency' | 'about'>('general');
+  const [expandedLogId, setExpandedLogId] = useState<string | null>(null);
 
   const handleSaveSettings = () => {
     onUpdateInstruction(tempInstruction);
     setIsSettingsOpen(false);
   };
 
-  const whyPrompt = "You are a logical analyst specializing in '5 Whys' root cause analysis. Given a statement, provide 3 brief, distinct, and logical causes or reasons for it. Keep each point under 10 words.";
-  const whatPrompt = "You are a strategic consultant specializing in decomposition and structural thinking. Given an idea or task, provide 3 brief, distinct components, sub-tasks, or 'What/How' elements that make it up. Keep each point under 10 words.";
+  // 実際に使用されているプロンプトのテンプレート
+  const whyPrompt = "You are a logical analyst specializing in '5 Whys' root cause analysis. Your task is to identify deep, underlying causes and reasons. STRICT RULE: Focus only on 'why' the issue exists. DO NOT provide solutions, actions, or countermeasures. Provide 3 brief, distinct, and logical causes or reasons for it. Keep each point under 10 words.";
+  const whatPrompt = "You are a strategic consultant specializing in decomposition and structural thinking. Given an idea or task and its broader context, provide 3 brief, distinct components, sub-tasks, or 'What/How' elements that make it up. Keep each point under 10 words.";
+  const refinePrompt = `You are an expert editor. Rewrite the given short phrase to be more natural, grammatically correct, and professional while strictly preserving its original meaning.
+For Japanese output, always use "である" style (da/de-aru) instead of "です/ます" style.
+Example: "事務手順煩雑" -> "事務の手順が煩雑である"
+Example: "コスト高い" -> "運用コストが高騰している"
+Keep it concise (ideally under 15 words). 
+Return ONLY the refined text string.`;
 
   return (
     <>
@@ -153,9 +164,9 @@ const Toolbar: React.FC<ToolbarProps> = ({
               </button>
             </div>
 
-            <div className="flex-1 overflow-y-auto p-6 space-y-6">
+            <div className="flex-1 overflow-y-auto p-6 space-y-8">
               {activeTab === 'general' && (
-                <>
+                <div className="space-y-6">
                   <div>
                     <label className="block text-sm font-bold text-slate-700 mb-2">
                       Custom System Instruction
@@ -184,11 +195,71 @@ const Toolbar: React.FC<ToolbarProps> = ({
                       Reset
                     </button>
                   </div>
-                </>
+                </div>
               )}
 
               {activeTab === 'transparency' && (
-                <div className="space-y-8 animate-in fade-in slide-in-from-bottom-2 duration-300">
+                <div className="space-y-10 animate-in fade-in slide-in-from-bottom-2 duration-300">
+                  <section>
+                    <h4 className="flex items-center gap-2 text-sm font-bold text-slate-800 mb-4">
+                      <History size={16} className="text-indigo-500" />
+                      Request History
+                    </h4>
+                    {promptLogs.length === 0 ? (
+                      <p className="text-xs text-slate-400 italic text-center py-8 bg-slate-50 rounded-2xl border border-dashed border-slate-200">
+                        No history yet. Start expanding nodes to see logs.
+                      </p>
+                    ) : (
+                      <div className="space-y-3">
+                        {promptLogs.map((log) => (
+                          <div key={log.id} className="bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-sm hover:shadow-md transition-all">
+                            <button 
+                              onClick={() => setExpandedLogId(expandedLogId === log.id ? null : log.id)}
+                              className="w-full px-4 py-3 flex items-center justify-between text-left hover:bg-slate-50 transition-colors"
+                            >
+                              <div className="flex items-center gap-3">
+                                <div className={`w-8 h-8 rounded-xl flex items-center justify-center ${log.type === 'expand' ? (log.mode === 'why' ? 'bg-amber-100 text-amber-600' : 'bg-indigo-100 text-indigo-600') : 'bg-emerald-100 text-emerald-600'}`}>
+                                  {log.type === 'expand' ? (log.mode === 'why' ? <HelpCircle size={14} /> : <Layers size={14} />) : <Wand2 size={14} />}
+                                </div>
+                                <div className="flex flex-col">
+                                  <span className="text-[11px] font-bold text-slate-800 truncate max-w-[150px]">"{log.input}"</span>
+                                  <span className="text-[9px] text-slate-400 font-medium">
+                                    {new Date(log.timestamp).toLocaleTimeString()} · {log.type === 'expand' ? (log.mode === 'why' ? 'Why? 分析' : '要素分解') : '文章校正'}
+                                  </span>
+                                </div>
+                              </div>
+                              <ChevronRight size={14} className={`text-slate-300 transition-transform duration-200 ${expandedLogId === log.id ? 'rotate-90' : ''}`} />
+                            </button>
+                            {expandedLogId === log.id && (
+                              <div className="p-4 bg-slate-50 border-t border-slate-100 animate-in slide-in-from-top-2 duration-200">
+                                <div className="space-y-4">
+                                  <div>
+                                    <div className="flex items-center gap-1.5 mb-2">
+                                      <Terminal size={12} className="text-slate-400" />
+                                      <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Full Prompt Sent to Gemini</span>
+                                    </div>
+                                    <pre className="text-[10px] p-3 bg-slate-900 text-indigo-100 rounded-xl font-mono overflow-x-auto whitespace-pre-wrap leading-relaxed shadow-inner border border-slate-800">
+                                      {log.fullPrompt}
+                                    </pre>
+                                  </div>
+                                  <div>
+                                    <div className="flex items-center gap-1.5 mb-2">
+                                      <FileText size={12} className="text-slate-400" />
+                                      <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">AI Response</span>
+                                    </div>
+                                    <pre className="text-[10px] p-3 bg-white text-slate-700 rounded-xl font-mono overflow-x-auto border border-slate-200 leading-relaxed shadow-sm">
+                                      {log.response}
+                                    </pre>
+                                  </div>
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </section>
+
                   <section>
                     <h4 className="flex items-center gap-2 text-sm font-bold text-slate-800 mb-4">
                       <Brain size={16} className="text-indigo-500" />
@@ -218,19 +289,25 @@ const Toolbar: React.FC<ToolbarProps> = ({
                   <section>
                     <h4 className="flex items-center gap-2 text-sm font-bold text-slate-800 mb-4">
                       <Info size={16} className="text-amber-500" />
-                      Core Prompts (Internal)
+                      Core Templates
                     </h4>
                     <div className="space-y-4">
                       <div className="bg-amber-50/50 p-4 rounded-2xl border border-amber-100">
                         <span className="text-[10px] font-bold text-amber-700 uppercase tracking-widest mb-2 block">Why Analysis Mode</span>
-                        <code className="text-xs text-amber-900 leading-relaxed block font-mono bg-white/50 p-3 rounded-lg border border-amber-50">
+                        <code className="text-[11px] text-amber-900 leading-relaxed block font-mono bg-white/50 p-3 rounded-lg border border-amber-50 whitespace-pre-wrap">
                           {whyPrompt}
                         </code>
                       </div>
                       <div className="bg-indigo-50/50 p-4 rounded-2xl border border-indigo-100">
                         <span className="text-[10px] font-bold text-indigo-700 uppercase tracking-widest mb-2 block">What Decomposition Mode</span>
-                        <code className="text-xs text-indigo-900 leading-relaxed block font-mono bg-white/50 p-3 rounded-lg border border-indigo-50">
+                        <code className="text-[11px] text-indigo-900 leading-relaxed block font-mono bg-white/50 p-3 rounded-lg border border-indigo-50 whitespace-pre-wrap">
                           {whatPrompt}
+                        </code>
+                      </div>
+                      <div className="bg-emerald-50/50 p-4 rounded-2xl border border-emerald-100">
+                        <span className="text-[10px] font-bold text-emerald-700 uppercase tracking-widest mb-2 block">Text Refinement Mode</span>
+                        <code className="text-[11px] text-emerald-900 leading-relaxed block font-mono bg-white/50 p-3 rounded-lg border border-emerald-50 whitespace-pre-wrap">
+                          {refinePrompt}
                         </code>
                       </div>
                     </div>
@@ -328,5 +405,22 @@ const Toolbar: React.FC<ToolbarProps> = ({
     </>
   );
 };
+
+// Internal icon for the list
+const ChevronRight = ({ size, className }: { size: number, className: string }) => (
+  <svg 
+    width={size} 
+    height={size} 
+    viewBox="0 0 24 24" 
+    fill="none" 
+    stroke="currentColor" 
+    strokeWidth="3" 
+    strokeLinecap="round" 
+    strokeLinejoin="round" 
+    className={className}
+  >
+    <path d="m9 18 6-6-6-6" />
+  </svg>
+);
 
 export default Toolbar;

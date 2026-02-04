@@ -11,11 +11,12 @@ import {
   Controls,
   Panel,
   Node,
+  useReactFlow,
 } from '@xyflow/react';
 import { Loader2, Sparkles, BrainCircuit } from 'lucide-react';
 import CustomNode from './CustomNode';
 import Toolbar from './Toolbar';
-import { CustomNodeData, AIExpandMode } from '../types';
+import { CustomNodeData, AIExpandMode, PromptLog } from '../types';
 import { getLayoutedElements, generateId } from '../lib/utils';
 import { generateExpandedNodes, refineNodeText } from '../services/geminiService';
 
@@ -25,6 +26,7 @@ const nodeTypes = {
 
 const STORAGE_KEY = 'ai-thought-tree-data';
 const SETTINGS_KEY = 'ai-thought-tree-settings';
+const LOGS_KEY = 'ai-thought-tree-logs';
 
 interface HistoryState {
   nodes: Node[];
@@ -38,6 +40,9 @@ const FlowEditor: React.FC = () => {
   const [isAnyExpanding, setIsAnyExpanding] = useState(false);
   const [aiStatus, setAiStatus] = useState('Analyzing context...');
   const [systemInstruction, setSystemInstruction] = useState('');
+  const [promptLogs, setPromptLogs] = useState<PromptLog[]>([]);
+  
+  const { fitView } = useReactFlow();
 
   // History state
   const [past, setPast] = useState<HistoryState[]>([]);
@@ -49,6 +54,49 @@ const FlowEditor: React.FC = () => {
   const edgesRef = useRef(edges);
   useEffect(() => { nodesRef.current = nodes; }, [nodes]);
   useEffect(() => { edgesRef.current = edges; }, [edges]);
+
+  const fitViewToContent = useCallback(() => {
+    setTimeout(() => {
+      fitView({ duration: 800, padding: 0.2 });
+    }, 50);
+  }, [fitView]);
+
+  const addPromptLog = useCallback((log: Omit<PromptLog, 'id' | 'timestamp'>) => {
+    const newLog: PromptLog = {
+      ...log,
+      id: generateId(),
+      timestamp: Date.now()
+    };
+    setPromptLogs(prev => {
+      const updated = [newLog, ...prev].slice(0, 50); // Keep last 50
+      localStorage.setItem(LOGS_KEY, JSON.stringify(updated));
+      return updated;
+    });
+  }, []);
+
+  const getAncestorContext = useCallback((nodes: Node[], edges: Edge[], startNodeId: string): string[] => {
+    const context: string[] = [];
+    let currentId = startNodeId;
+    
+    while (true) {
+      const incomingEdge = edges.find(e => e.target === currentId);
+      if (!incomingEdge) break;
+      
+      const parentNode = nodes.find(n => n.id === incomingEdge.source);
+      if (!parentNode) break;
+      
+      context.unshift((parentNode.data as CustomNodeData).label);
+      currentId = parentNode.id;
+    }
+    
+    return context;
+  }, []);
+
+  const getPinnedContext = useCallback((nodes: Node[]): string[] => {
+    return nodes
+      .filter(n => (n.data as CustomNodeData).isPinned)
+      .map(n => (n.data as CustomNodeData).label);
+  }, []);
 
   const getDescendantIds = useCallback((nodes: Node[], edges: Edge[], startNodeId: string): string[] => {
     const descendantIds: string[] = [];
@@ -140,7 +188,7 @@ const FlowEditor: React.FC = () => {
     setFuture([]);
   }, []);
 
-  function bindNodeCallbacks(nodesToBind: Node[]) {
+  function bindNodeCallbacks(nodesToBind: Node[], forceResetExpanding = false) {
     return nodesToBind.map(node => ({
       ...node,
       data: {
@@ -150,9 +198,17 @@ const FlowEditor: React.FC = () => {
         onExpand: expandNode,
         onRefine: refineNode,
         onToggleCollapse: toggleCollapse,
+        onTogglePin: togglePin,
+        isExpanding: forceResetExpanding ? false : node.data.isExpanding,
       }
     }));
   }
+
+  const togglePin = useCallback((id: string) => {
+    setNodes(nds => nds.map(n => 
+      n.id === id ? { ...n, data: { ...n.data, isPinned: !n.data.isPinned } } : n
+    ));
+  }, [setNodes]);
 
   const toggleCollapse = useCallback((id: string) => {
     takeSnapshot(nodesRef.current, edgesRef.current);
@@ -162,7 +218,8 @@ const FlowEditor: React.FC = () => {
     const { nodes: visNodes, edges: visEdges } = syncVisibility(updatedNodes, edgesRef.current);
     setNodes(bindNodeCallbacks(visNodes));
     setEdges(visEdges);
-  }, [takeSnapshot, syncVisibility]);
+    fitViewToContent();
+  }, [takeSnapshot, syncVisibility, fitViewToContent]);
 
   const deleteNode = useCallback((id: string) => {
     const currentNodes = nodesRef.current;
@@ -175,7 +232,8 @@ const FlowEditor: React.FC = () => {
     const { nodes: visNodes, edges: visEdges } = syncVisibility(filteredNodes, filteredEdges);
     setNodes(bindNodeCallbacks(visNodes));
     setEdges(visEdges);
-  }, [setNodes, setEdges, takeSnapshot, syncVisibility, getDescendantIds]);
+    fitViewToContent();
+  }, [setNodes, setEdges, takeSnapshot, syncVisibility, getDescendantIds, fitViewToContent]);
 
   const editNode = useCallback((id: string, newLabel: string) => {
     takeSnapshot(nodesRef.current, edgesRef.current);
@@ -191,7 +249,13 @@ const FlowEditor: React.FC = () => {
     setNodes(nds => nds.map(n => n.id === id ? { ...n, data: { ...n.data, isExpanding: true } } : n));
 
     try {
-      const refined = await refineNodeText(node.data.label, systemInstruction);
+      const { refined, fullPrompt } = await refineNodeText(node.data.label, systemInstruction);
+      addPromptLog({
+        type: 'refine',
+        input: node.data.label,
+        fullPrompt,
+        response: refined
+      });
       takeSnapshot(nodesRef.current, edgesRef.current);
       setNodes(nds => nds.map(n => n.id === id ? { 
         ...n, 
@@ -203,7 +267,7 @@ const FlowEditor: React.FC = () => {
     } finally {
       setIsAnyExpanding(false);
     }
-  }, [systemInstruction, takeSnapshot]);
+  }, [systemInstruction, takeSnapshot, addPromptLog]);
 
   const expandNode = useCallback(async (id: string, mode: AIExpandMode, overrideLabel?: string) => {
     const currentNodes = nodesRef.current;
@@ -216,7 +280,19 @@ const FlowEditor: React.FC = () => {
 
     try {
       const parentLabel = overrideLabel || (parentNode.data as CustomNodeData).label;
-      const ideas = await generateExpandedNodes(parentLabel, mode, systemInstruction);
+      const pinnedContext = getPinnedContext(currentNodes);
+      const context = pinnedContext.length > 0 ? pinnedContext : getAncestorContext(currentNodes, currentEdges, id);
+      
+      const { ideas, fullPrompt } = await generateExpandedNodes(parentLabel, mode, context, systemInstruction);
+      
+      addPromptLog({
+        type: 'expand',
+        mode,
+        input: parentLabel,
+        fullPrompt,
+        response: JSON.stringify(ideas)
+      });
+
       const descendantIds = getDescendantIds(currentNodes, currentEdges, id);
       const latestNodes = nodesRef.current.filter(n => !descendantIds.includes(n.id));
       const latestEdges = edgesRef.current.filter(e => !descendantIds.includes(e.source) && !descendantIds.includes(e.target));
@@ -237,6 +313,7 @@ const FlowEditor: React.FC = () => {
             onExpand: expandNode, 
             onRefine: refineNode,
             onToggleCollapse: toggleCollapse,
+            onTogglePin: togglePin,
             generatedBy: mode 
           },
         });
@@ -257,37 +334,46 @@ const FlowEditor: React.FC = () => {
       const { nodes: visNodes, edges: visEdges } = syncVisibility(layoutedNodes, layoutedEdges);
       setNodes(bindNodeCallbacks(visNodes));
       setEdges(visEdges);
+      fitViewToContent();
     } catch (error) {
       alert("AI Generation failed.");
       setNodes((nds) => nds.map((n) => (n.id === id ? { ...n, data: { ...n.data, isExpanding: false } } : n)));
     } finally {
       setIsAnyExpanding(false);
     }
-  }, [deleteNode, editNode, takeSnapshot, getDescendantIds, systemInstruction, syncVisibility, toggleCollapse, refineNode]);
+  }, [deleteNode, editNode, takeSnapshot, getDescendantIds, getPinnedContext, getAncestorContext, systemInstruction, syncVisibility, toggleCollapse, togglePin, refineNode, fitViewToContent, addPromptLog]);
 
   const undo = useCallback(() => {
     if (past.length === 0) return;
     skipHistoryRef.current = true;
+    setIsAnyExpanding(false); // Force reset AI state on undo
     const previous = past[past.length - 1];
     const newPast = past.slice(0, past.length - 1);
     setFuture((prev) => [{ nodes: JSON.parse(JSON.stringify(nodes)), edges: JSON.parse(JSON.stringify(edges)) }, ...prev]);
-    setNodes(bindNodeCallbacks(previous.nodes));
+    setNodes(bindNodeCallbacks(previous.nodes, true));
     setEdges(previous.edges);
     setPast(newPast);
-    setTimeout(() => { skipHistoryRef.current = false; }, 0);
-  }, [past, nodes, edges]);
+    setTimeout(() => { 
+      skipHistoryRef.current = false; 
+      fitViewToContent();
+    }, 0);
+  }, [past, nodes, edges, fitViewToContent]);
 
   const redo = useCallback(() => {
     if (future.length === 0) return;
     skipHistoryRef.current = true;
+    setIsAnyExpanding(false); // Force reset AI state on redo
     const next = future[0];
     const newFuture = future.slice(1);
     setPast((prev) => [...prev, { nodes: JSON.parse(JSON.stringify(nodes)), edges: JSON.parse(JSON.stringify(edges)) }]);
-    setNodes(bindNodeCallbacks(next.nodes));
+    setNodes(bindNodeCallbacks(next.nodes, true));
     setEdges(next.edges);
     setFuture(newFuture);
-    setTimeout(() => { skipHistoryRef.current = false; }, 0);
-  }, [future, nodes, edges]);
+    setTimeout(() => { 
+      skipHistoryRef.current = false; 
+      fitViewToContent();
+    }, 0);
+  }, [future, nodes, edges, fitViewToContent]);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -305,8 +391,9 @@ const FlowEditor: React.FC = () => {
       try {
         const { nodes: savedNodes, edges: savedEdges } = JSON.parse(saved);
         const { nodes: visNodes, edges: visEdges } = syncVisibility(savedNodes, savedEdges);
-        setNodes(bindNodeCallbacks(visNodes));
+        setNodes(bindNodeCallbacks(visNodes, true));
         setEdges(visEdges);
+        fitViewToContent();
       } catch (e) {
         addRootNode();
       }
@@ -318,6 +405,12 @@ const FlowEditor: React.FC = () => {
       try {
         const parsed = JSON.parse(savedSettings);
         setSystemInstruction(parsed.customInstruction || '');
+      } catch (e) {}
+    }
+    const savedLogs = localStorage.getItem(LOGS_KEY);
+    if (savedLogs) {
+      try {
+        setPromptLogs(JSON.parse(savedLogs));
       } catch (e) {}
     }
     setIsInitialized(true);
@@ -340,7 +433,8 @@ const FlowEditor: React.FC = () => {
     const { nodes: visNodes, edges: visEdges } = syncVisibility(nodesRef.current, newEdges);
     setNodes(bindNodeCallbacks(visNodes));
     setEdges(visEdges);
-  }, [setEdges, takeSnapshot, syncVisibility]);
+    fitViewToContent();
+  }, [setEdges, takeSnapshot, syncVisibility, fitViewToContent]);
 
   const addRootNode = useCallback(() => {
     const id = generateId();
@@ -355,13 +449,15 @@ const FlowEditor: React.FC = () => {
         onEdit: editNode, 
         onExpand: expandNode, 
         onRefine: refineNode,
-        onToggleCollapse: toggleCollapse 
+        onToggleCollapse: toggleCollapse,
+        onTogglePin: togglePin
       },
     };
     const { nodes: visNodes, edges: visEdges } = syncVisibility([...nodesRef.current, newNode], edgesRef.current);
     setNodes(bindNodeCallbacks(visNodes));
     setEdges(visEdges);
-  }, [deleteNode, editNode, expandNode, takeSnapshot, syncVisibility, toggleCollapse, refineNode]);
+    fitViewToContent();
+  }, [deleteNode, editNode, expandNode, takeSnapshot, syncVisibility, toggleCollapse, togglePin, refineNode, fitViewToContent]);
 
   const clearTree = useCallback(() => {
     if (window.confirm('全てのノードを削除してもよろしいですか？')) {
@@ -378,7 +474,8 @@ const FlowEditor: React.FC = () => {
     const { nodes: visNodes, edges: visEdges } = syncVisibility(layoutedNodes, layoutedEdges);
     setNodes(bindNodeCallbacks(visNodes));
     setEdges(visEdges);
-  }, [takeSnapshot, syncVisibility]);
+    fitViewToContent();
+  }, [takeSnapshot, syncVisibility, fitViewToContent]);
 
   const exportData = useCallback(() => {
     const data = { nodes: nodesRef.current, edges: edgesRef.current };
@@ -426,6 +523,7 @@ const FlowEditor: React.FC = () => {
         canRedo={future.length > 0}
         systemInstruction={systemInstruction}
         onUpdateInstruction={updateSystemInstruction}
+        promptLogs={promptLogs}
       />
       
       <ReactFlow
