@@ -17,7 +17,7 @@ import CustomNode from './CustomNode';
 import Toolbar from './Toolbar';
 import { CustomNodeData, AIExpandMode } from '../types';
 import { getLayoutedElements, generateId } from '../lib/utils';
-import { generateExpandedNodes } from '../services/geminiService';
+import { generateExpandedNodes, refineNodeText } from '../services/geminiService';
 
 const nodeTypes = {
   custom: CustomNode,
@@ -45,13 +45,11 @@ const FlowEditor: React.FC = () => {
 
   const skipHistoryRef = useRef(false);
   
-  // Latest state refs to prevent stale closures in async expansion logic
   const nodesRef = useRef(nodes);
   const edgesRef = useRef(edges);
   useEffect(() => { nodesRef.current = nodes; }, [nodes]);
   useEffect(() => { edgesRef.current = edges; }, [edges]);
 
-  // Helper to find all descendants of a node
   const getDescendantIds = useCallback((nodes: Node[], edges: Edge[], startNodeId: string): string[] => {
     const descendantIds: string[] = [];
     const queue = [startNodeId];
@@ -66,12 +64,10 @@ const FlowEditor: React.FC = () => {
     return Array.from(new Set(descendantIds));
   }, []);
 
-  // Update visibility based on isCollapsed states and calculate descendant counts
   const syncVisibility = useCallback((currentNodes: Node[], currentEdges: Edge[]) => {
     const hiddenNodeIds = new Set<string>();
     const nodeDescendantsMap = new Map<string, number>();
     
-    // First, map all immediate children for easier traversal
     const childrenMap = new Map<string, string[]>();
     currentEdges.forEach(edge => {
       const children = childrenMap.get(edge.source) || [];
@@ -79,7 +75,6 @@ const FlowEditor: React.FC = () => {
       childrenMap.set(edge.source, children);
     });
 
-    // Helper to count ALL descendants and determine hidden state
     const traverse = (nodeId: string, isParentCollapsed: boolean): number => {
       const children = childrenMap.get(nodeId) || [];
       const node = currentNodes.find(n => n.id === nodeId);
@@ -97,7 +92,6 @@ const FlowEditor: React.FC = () => {
       return totalDescendants;
     };
 
-    // Start traversal from root nodes
     const rootNodes = currentNodes.filter(n => !currentEdges.find(e => e.target === n.id));
     rootNodes.forEach(root => traverse(root.id, false));
 
@@ -119,14 +113,13 @@ const FlowEditor: React.FC = () => {
     return { nodes: updatedNodes, edges: updatedEdges };
   }, []);
 
-  // Status message rotation for AI expansion
   useEffect(() => {
     if (!isAnyExpanding) return;
     const statuses = [
       'Analyzing context...',
       'Consulting Gemini...',
-      'Generating ideas...',
-      'Structuring tree...',
+      'Refining expression...',
+      'Polishing thoughts...',
       'Finalizing...'
     ];
     let i = 0;
@@ -147,6 +140,20 @@ const FlowEditor: React.FC = () => {
     setFuture([]);
   }, []);
 
+  function bindNodeCallbacks(nodesToBind: Node[]) {
+    return nodesToBind.map(node => ({
+      ...node,
+      data: {
+        ...node.data,
+        onDelete: deleteNode,
+        onEdit: editNode,
+        onExpand: expandNode,
+        onRefine: refineNode,
+        onToggleCollapse: toggleCollapse,
+      }
+    }));
+  }
+
   const toggleCollapse = useCallback((id: string) => {
     takeSnapshot(nodesRef.current, edgesRef.current);
     const updatedNodes = nodesRef.current.map(n => 
@@ -158,31 +165,105 @@ const FlowEditor: React.FC = () => {
   }, [takeSnapshot, syncVisibility]);
 
   const deleteNode = useCallback((id: string) => {
-    takeSnapshot(nodesRef.current, edgesRef.current);
-    const filteredNodes = nodesRef.current.filter((n) => n.id !== id);
-    const filteredEdges = edgesRef.current.filter((e) => e.source !== id && e.target !== id);
+    const currentNodes = nodesRef.current;
+    const currentEdges = edgesRef.current;
+    const descendantIds = getDescendantIds(currentNodes, currentEdges, id);
+    const idsToRemove = new Set([id, ...descendantIds]);
+    takeSnapshot(currentNodes, currentEdges);
+    const filteredNodes = currentNodes.filter((n) => !idsToRemove.has(n.id));
+    const filteredEdges = currentEdges.filter((e) => !idsToRemove.has(e.source) && !idsToRemove.has(e.target));
     const { nodes: visNodes, edges: visEdges } = syncVisibility(filteredNodes, filteredEdges);
     setNodes(bindNodeCallbacks(visNodes));
     setEdges(visEdges);
-  }, [setNodes, setEdges, takeSnapshot, syncVisibility]);
+  }, [setNodes, setEdges, takeSnapshot, syncVisibility, getDescendantIds]);
 
   const editNode = useCallback((id: string, newLabel: string) => {
     takeSnapshot(nodesRef.current, edgesRef.current);
     setNodes((nds) => nds.map((n) => (n.id === id ? { ...n, data: { ...n.data, label: newLabel } } : n)));
   }, [setNodes, takeSnapshot]);
 
-  const bindNodeCallbacks = useCallback((nodesToBind: Node[]) => {
-    return nodesToBind.map(node => ({
-      ...node,
-      data: {
-        ...node.data,
-        onDelete: deleteNode,
-        onEdit: editNode,
-        onExpand: expandNode,
-        onToggleCollapse: toggleCollapse,
-      }
-    }));
-  }, [deleteNode, editNode, toggleCollapse]); // Dependencies added properly
+  const refineNode = useCallback(async (id: string) => {
+    const currentNodes = nodesRef.current;
+    const node = currentNodes.find(n => n.id === id);
+    if (!node) return;
+
+    setIsAnyExpanding(true);
+    setNodes(nds => nds.map(n => n.id === id ? { ...n, data: { ...n.data, isExpanding: true } } : n));
+
+    try {
+      const refined = await refineNodeText(node.data.label, systemInstruction);
+      takeSnapshot(nodesRef.current, edgesRef.current);
+      setNodes(nds => nds.map(n => n.id === id ? { 
+        ...n, 
+        data: { ...n.data, label: refined, isExpanding: false } 
+      } : n));
+    } catch (error) {
+      alert("Refinement failed.");
+      setNodes(nds => nds.map(n => n.id === id ? { ...n, data: { ...n.data, isExpanding: false } } : n));
+    } finally {
+      setIsAnyExpanding(false);
+    }
+  }, [systemInstruction, takeSnapshot]);
+
+  const expandNode = useCallback(async (id: string, mode: AIExpandMode, overrideLabel?: string) => {
+    const currentNodes = nodesRef.current;
+    const currentEdges = edgesRef.current;
+    const parentNode = currentNodes.find((n) => n.id === id);
+    if (!parentNode) return;
+
+    setIsAnyExpanding(true);
+    setNodes((nds) => nds.map((n) => (n.id === id ? { ...n, data: { ...n.data, isExpanding: true, isCollapsed: false } } : n)));
+
+    try {
+      const parentLabel = overrideLabel || (parentNode.data as CustomNodeData).label;
+      const ideas = await generateExpandedNodes(parentLabel, mode, systemInstruction);
+      const descendantIds = getDescendantIds(currentNodes, currentEdges, id);
+      const latestNodes = nodesRef.current.filter(n => !descendantIds.includes(n.id));
+      const latestEdges = edgesRef.current.filter(e => !descendantIds.includes(e.source) && !descendantIds.includes(e.target));
+      takeSnapshot(latestNodes, latestEdges);
+
+      const newNodes: Node[] = [];
+      const newEdges: Edge[] = [];
+      ideas.forEach((idea) => {
+        const newId = generateId();
+        newNodes.push({
+          id: newId,
+          type: 'custom',
+          position: { x: parentNode.position.x, y: parentNode.position.y + 150 },
+          data: { 
+            label: idea, 
+            onDelete: deleteNode, 
+            onEdit: editNode, 
+            onExpand: expandNode, 
+            onRefine: refineNode,
+            onToggleCollapse: toggleCollapse,
+            generatedBy: mode 
+          },
+        });
+        newEdges.push({
+          id: `e-${id}-${newId}`,
+          source: id,
+          target: newId,
+          animated: true,
+          style: { stroke: mode === 'why' ? '#f59e0b' : '#6366f1', strokeWidth: 2 },
+        });
+      });
+
+      const updatedNodes = [...latestNodes, ...newNodes].map((n) => 
+        n.id === id ? { ...n, data: { ...n.data, isExpanding: false, label: parentLabel, isCollapsed: false } } : n
+      );
+      const updatedEdges = [...latestEdges, ...newEdges];
+      const { nodes: layoutedNodes, edges: layoutedEdges } = getLayoutedElements(updatedNodes, updatedEdges);
+      const { nodes: visNodes, edges: visEdges } = syncVisibility(layoutedNodes, layoutedEdges);
+      setNodes(bindNodeCallbacks(visNodes));
+      setEdges(visEdges);
+    } catch (error) {
+      alert("AI Generation failed.");
+      setNodes((nds) => nds.map((n) => (n.id === id ? { ...n, data: { ...n.data, isExpanding: false } } : n)));
+    } finally {
+      setIsAnyExpanding(false);
+    }
+  }, [deleteNode, editNode, takeSnapshot, getDescendantIds, systemInstruction, syncVisibility, toggleCollapse, refineNode]);
 
   const undo = useCallback(() => {
     if (past.length === 0) return;
@@ -190,12 +271,11 @@ const FlowEditor: React.FC = () => {
     const previous = past[past.length - 1];
     const newPast = past.slice(0, past.length - 1);
     setFuture((prev) => [{ nodes: JSON.parse(JSON.stringify(nodes)), edges: JSON.parse(JSON.stringify(edges)) }, ...prev]);
-    
     setNodes(bindNodeCallbacks(previous.nodes));
     setEdges(previous.edges);
     setPast(newPast);
     setTimeout(() => { skipHistoryRef.current = false; }, 0);
-  }, [past, nodes, edges, bindNodeCallbacks]);
+  }, [past, nodes, edges]);
 
   const redo = useCallback(() => {
     if (future.length === 0) return;
@@ -203,12 +283,11 @@ const FlowEditor: React.FC = () => {
     const next = future[0];
     const newFuture = future.slice(1);
     setPast((prev) => [...prev, { nodes: JSON.parse(JSON.stringify(nodes)), edges: JSON.parse(JSON.stringify(edges)) }]);
-    
     setNodes(bindNodeCallbacks(next.nodes));
     setEdges(next.edges);
     setFuture(newFuture);
     setTimeout(() => { skipHistoryRef.current = false; }, 0);
-  }, [future, nodes, edges, bindNodeCallbacks]);
+  }, [future, nodes, edges]);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -234,7 +313,6 @@ const FlowEditor: React.FC = () => {
     } else {
       addRootNode();
     }
-
     const savedSettings = localStorage.getItem(SETTINGS_KEY);
     if (savedSettings) {
       try {
@@ -242,7 +320,6 @@ const FlowEditor: React.FC = () => {
         setSystemInstruction(parsed.customInstruction || '');
       } catch (e) {}
     }
-
     setIsInitialized(true);
   }, []);
 
@@ -263,63 +340,7 @@ const FlowEditor: React.FC = () => {
     const { nodes: visNodes, edges: visEdges } = syncVisibility(nodesRef.current, newEdges);
     setNodes(bindNodeCallbacks(visNodes));
     setEdges(visEdges);
-  }, [setEdges, takeSnapshot, syncVisibility, bindNodeCallbacks]);
-
-  const expandNode = useCallback(async (id: string, mode: AIExpandMode, overrideLabel?: string) => {
-    const currentNodes = nodesRef.current;
-    const currentEdges = edgesRef.current;
-    const parentNode = currentNodes.find((n) => n.id === id);
-    if (!parentNode) return;
-
-    setIsAnyExpanding(true);
-    setNodes((nds) => nds.map((n) => (n.id === id ? { ...n, data: { ...n.data, isExpanding: true, isCollapsed: false } } : n)));
-
-    try {
-      const parentLabel = overrideLabel || (parentNode.data as CustomNodeData).label;
-      const ideas = await generateExpandedNodes(parentLabel, mode, systemInstruction);
-      
-      const descendantIds = getDescendantIds(currentNodes, currentEdges, id);
-      const latestNodes = nodesRef.current.filter(n => !descendantIds.includes(n.id));
-      const latestEdges = edgesRef.current.filter(e => !descendantIds.includes(e.source) && !descendantIds.includes(e.target));
-      
-      takeSnapshot(latestNodes, latestEdges);
-
-      const newNodes: Node[] = [];
-      const newEdges: Edge[] = [];
-
-      ideas.forEach((idea) => {
-        const newId = generateId();
-        newNodes.push({
-          id: newId,
-          type: 'custom',
-          position: { x: parentNode.position.x, y: parentNode.position.y + 150 },
-          data: { label: idea, onDelete: deleteNode, onEdit: editNode, onExpand: expandNode, onToggleCollapse: toggleCollapse },
-        });
-        newEdges.push({
-          id: `e-${id}-${newId}`,
-          source: id,
-          target: newId,
-          animated: true,
-          style: { stroke: mode === 'why' ? '#f59e0b' : '#6366f1', strokeWidth: 2 },
-        });
-      });
-
-      const updatedNodes = [...latestNodes, ...newNodes].map((n) => 
-        n.id === id ? { ...n, data: { ...n.data, isExpanding: false, label: parentLabel, isCollapsed: false } } : n
-      );
-      const updatedEdges = [...latestEdges, ...newEdges];
-      
-      const { nodes: layoutedNodes, edges: layoutedEdges } = getLayoutedElements(updatedNodes, updatedEdges);
-      const { nodes: visNodes, edges: visEdges } = syncVisibility(layoutedNodes, layoutedEdges);
-      setNodes(bindNodeCallbacks(visNodes));
-      setEdges(visEdges);
-    } catch (error) {
-      alert("AI Generation failed.");
-      setNodes((nds) => nds.map((n) => (n.id === id ? { ...n, data: { ...n.data, isExpanding: false } } : n)));
-    } finally {
-      setIsAnyExpanding(false);
-    }
-  }, [deleteNode, editNode, takeSnapshot, bindNodeCallbacks, getDescendantIds, systemInstruction, syncVisibility, toggleCollapse]);
+  }, [setEdges, takeSnapshot, syncVisibility]);
 
   const addRootNode = useCallback(() => {
     const id = generateId();
@@ -328,19 +349,23 @@ const FlowEditor: React.FC = () => {
       id,
       type: 'custom',
       position: { x: window.innerWidth / 2 - 120, y: 150 },
-      data: { label: 'New Idea', onDelete: deleteNode, onEdit: editNode, onExpand: expandNode, onToggleCollapse: toggleCollapse },
+      data: { 
+        label: 'New Idea', 
+        onDelete: deleteNode, 
+        onEdit: editNode, 
+        onExpand: expandNode, 
+        onRefine: refineNode,
+        onToggleCollapse: toggleCollapse 
+      },
     };
     const { nodes: visNodes, edges: visEdges } = syncVisibility([...nodesRef.current, newNode], edgesRef.current);
     setNodes(bindNodeCallbacks(visNodes));
     setEdges(visEdges);
-  }, [deleteNode, editNode, expandNode, takeSnapshot, syncVisibility, toggleCollapse]);
+  }, [deleteNode, editNode, expandNode, takeSnapshot, syncVisibility, toggleCollapse, refineNode]);
 
   const clearTree = useCallback(() => {
-    if (window.confirm('全てのノードを削除してもよろしいですか？（この操作は元に戻せます）')) {
-      // Undoできるようにスナップショットを保存
+    if (window.confirm('全てのノードを削除してもよろしいですか？')) {
       takeSnapshot(nodesRef.current, edgesRef.current);
-      
-      // ステートとストレージをクリア
       setNodes([]);
       setEdges([]);
       localStorage.setItem(STORAGE_KEY, JSON.stringify({ nodes: [], edges: [] }));
@@ -353,7 +378,7 @@ const FlowEditor: React.FC = () => {
     const { nodes: visNodes, edges: visEdges } = syncVisibility(layoutedNodes, layoutedEdges);
     setNodes(bindNodeCallbacks(visNodes));
     setEdges(visEdges);
-  }, [takeSnapshot, bindNodeCallbacks, syncVisibility]);
+  }, [takeSnapshot, syncVisibility]);
 
   const exportData = useCallback(() => {
     const data = { nodes: nodesRef.current, edges: edgesRef.current };

@@ -8,11 +8,13 @@ export interface CustomNodeData {
   onDelete: (id: string) => void;
   onEdit: (id: string, newLabel: string) => void;
   onExpand: (id: string, mode: AIExpandMode, overrideLabel?: string) => void;
+  onRefine: (id: string) => void; // Added for text refinement
   onToggleCollapse: (id: string) => void;
   isExpanding?: boolean;
   isCollapsed?: boolean;
   hasChildren?: boolean;
   descendantCount?: number;
+  generatedBy?: AIExpandMode;
 }
 
 export type CustomNodeType = Node<CustomNodeData>;

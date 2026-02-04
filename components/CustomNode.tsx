@@ -1,7 +1,7 @@
 
 import React, { useState, useCallback, useEffect } from 'react';
 import { Handle, Position, NodeProps } from '@xyflow/react';
-import { Trash2, HelpCircle, Layers, Loader2, Edit3, Check, X, Sparkles, ChevronDown, ChevronRight } from 'lucide-react';
+import { Trash2, HelpCircle, Layers, Loader2, Edit3, Check, Sparkles, ChevronDown, ChevronRight, Wand2 } from 'lucide-react';
 import { CustomNodeData, AIExpandMode } from '../types';
 
 const CustomNode: React.FC<NodeProps> = ({ id, data, selected }) => {
@@ -35,16 +35,44 @@ const CustomNode: React.FC<NodeProps> = ({ id, data, selected }) => {
     typedData.onExpand(id, mode, finalLabel);
   }, [id, isEditing, editValue, typedData]);
 
+  const onRefineClick = useCallback((e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (typedData.isExpanding) return;
+    typedData.onRefine(id);
+  }, [id, typedData]);
+
+  // Styling based on mode
+  const isWhy = typedData.generatedBy === 'why';
+  const isWhat = typedData.generatedBy === 'what';
+  
+  const accentColor = isWhy ? 'border-amber-400' : isWhat ? 'border-indigo-400' : 'border-slate-200';
+  const badgeColor = isWhy ? 'bg-amber-100 text-amber-700' : isWhat ? 'bg-indigo-100 text-indigo-700' : '';
+  const bgColor = isWhy ? 'bg-amber-50/30' : isWhat ? 'bg-indigo-50/30' : 'bg-white';
+
   return (
     <div 
       className={`
-        relative px-4 py-3 rounded-xl border-2 bg-white shadow-lg transition-all w-[240px]
+        relative px-4 py-3 rounded-xl border-2 shadow-lg transition-all w-[240px]
         ${typedData.isExpanding ? 'animate-ai-pulse border-indigo-500 bg-indigo-50/30' : 
           selected ? 'border-indigo-500 ring-2 ring-indigo-200' : 'border-slate-200 hover:border-indigo-300'}
         ${typedData.isCollapsed ? 'ring-1 ring-slate-200 opacity-90' : ''}
+        ${bgColor}
       `}
       onDoubleClick={() => !typedData.isExpanding && setIsEditing(true)}
     >
+      {/* Visual Accent Line */}
+      {typedData.generatedBy && (
+        <div className={`absolute left-0 top-1/2 -translate-y-1/2 w-1.5 h-12 rounded-r-full border-r-2 ${accentColor}`} />
+      )}
+
+      {/* Mode Badge */}
+      {typedData.generatedBy && !isEditing && (
+        <div className={`absolute -top-2.5 left-4 px-2 py-0.5 rounded-full text-[9px] font-bold uppercase tracking-wider shadow-sm flex items-center gap-1 ${badgeColor}`}>
+          {isWhy ? <HelpCircle size={10} /> : <Layers size={10} />}
+          {isWhy ? '原因' : '要素'}
+        </div>
+      )}
+
       {typedData.isExpanding && (
         <div className="absolute -top-3 -right-3 bg-indigo-600 text-white p-1.5 rounded-full shadow-lg z-10 animate-bounce">
           <Sparkles size={14} />
@@ -91,7 +119,7 @@ const CustomNode: React.FC<NodeProps> = ({ id, data, selected }) => {
             />
             <div className="flex items-center gap-0.5">
               <button 
-                onMouseDown={(e) => e.preventDefault()} // Prevent blur before click
+                onMouseDown={(e) => e.preventDefault()}
                 onClick={handleEdit} 
                 className="p-1 text-green-600 hover:bg-green-50 rounded transition-colors"
                 title="Save"
@@ -101,21 +129,30 @@ const CustomNode: React.FC<NodeProps> = ({ id, data, selected }) => {
             </div>
           </div>
         ) : (
-          <div className="flex items-start justify-between group cursor-pointer" title="Double click to edit">
+          <div className="flex items-start justify-between group cursor-pointer mt-1" title="Double click to edit">
             <span className={`text-sm font-semibold text-slate-800 break-words flex-1 pr-2 ${typedData.isCollapsed ? 'line-clamp-2' : ''}`}>
               {typedData.label}
             </span>
             {!typedData.isExpanding && (
-              <button 
-                onClick={(e) => {
-                  e.stopPropagation();
-                  setIsEditing(true);
-                }}
-                className="opacity-0 group-hover:opacity-100 p-1 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded transition-all"
-                title="Edit text"
-              >
-                <Edit3 size={14} />
-              </button>
+              <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                <button 
+                  onClick={onRefineClick}
+                  className="p-1 text-slate-400 hover:text-amber-500 hover:bg-amber-50 rounded transition-all"
+                  title="Refine text (AI)"
+                >
+                  <Wand2 size={14} />
+                </button>
+                <button 
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setIsEditing(true);
+                  }}
+                  className="p-1 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded transition-all"
+                  title="Edit text"
+                >
+                  <Edit3 size={14} />
+                </button>
+              </div>
             )}
           </div>
         )}
