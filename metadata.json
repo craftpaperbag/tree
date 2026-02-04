@@ -1,0 +1,5 @@
+{
+  "name": "AI Thought Expansion Tree",
+  "description": "A powerful mind-mapping tool that leverages Google Gemini AI to help users decompose ideas (What/How) and analyze root causes (Why Analysis). Features automatic layouting, local storage persistence, and JSON export.",
+  "requestFramePermissions": []
+}

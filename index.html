@@ -1,0 +1,123 @@
+
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>AI Thought Expansion Tree</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- React Flow / XYFlow Base Styles -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xyflow/react@12.10.0/dist/style.css" />
+    <style>
+      :root {
+        --xy-controls-button-background: #ffffff;
+        --xy-controls-button-background-hover: #f1f5f9;
+        --xy-controls-button-color: #1e293b;
+        --xy-controls-button-color-hover: #4f46e5;
+        --xy-controls-button-border-color: #e2e8f0;
+      }
+
+      body {
+        margin: 0;
+        padding: 0;
+        overflow: hidden;
+      }
+      #root {
+        width: 100vw;
+        height: 100vh;
+      }
+      @keyframes pulse-border {
+        0%, 100% { border-color: #6366f1; box-shadow: 0 0 0 0 rgba(99, 102, 241, 0.4); }
+        50% { border-color: #818cf8; box-shadow: 0 0 0 8px rgba(99, 102, 241, 0); }
+      }
+      .animate-ai-pulse {
+        animation: pulse-border 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+      }
+
+      /* Force XYFlow Controls icons to be visible */
+      .xyflow__controls {
+        box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05) !important;
+        border: 1px solid #e2e8f0 !important;
+        border-radius: 12px !important;
+        overflow: hidden !important;
+        background: white !important;
+      }
+
+      .xyflow__controls-button {
+        border-bottom: 1px solid #f1f5f9 !important;
+        background: white !important;
+        color: #334155 !important;
+        transition: all 0.2s !important;
+        height: 32px !important;
+        width: 32px !important;
+        display: flex !important;
+        align-items: center !important;
+        justify-content: center !important;
+      }
+
+      .xyflow__controls-button:last-child {
+        border-bottom: none !important;
+      }
+
+      .xyflow__controls-button:hover {
+        background: #f8fafc !important;
+        color: #6366f1 !important;
+      }
+
+      /* Deep target the SVG paths to ensure they take the current color */
+      .xyflow__controls-button svg {
+        width: 14px !important;
+        height: 14px !important;
+        fill: currentColor !important;
+        stroke: currentColor !important;
+        display: block !important;
+      }
+
+      .xyflow__controls-button svg path {
+        fill: currentColor !important;
+        stroke: none !important;
+      }
+
+      /* Fix for mobile icon visibility and positioning */
+      @media (max-width: 640px) {
+        .xyflow__controls {
+          margin: 0 !important;
+          border-radius: 10px !important;
+        }
+        .xyflow__controls-button {
+          height: 38px !important;
+          width: 38px !important;
+        }
+        .xyflow__controls-button svg {
+          width: 18px !important;
+          height: 18px !important;
+        }
+      }
+
+      /* Custom scrollbar for toolbar if needed */
+      .no-scrollbar::-webkit-scrollbar {
+        display: none;
+      }
+      .no-scrollbar {
+        -ms-overflow-style: none;
+        scrollbar-width: none;
+      }
+    </style>
+  <script type="importmap">
+{
+  "imports": {
+    "@google/genai": "https://esm.sh/@google/genai@^1.39.0",
+    "react": "https://esm.sh/react@^19.2.4",
+    "lucide-react": "https://esm.sh/lucide-react@^0.563.0",
+    "react-dom/": "https://esm.sh/react-dom@^19.2.4/",
+    "react/": "https://esm.sh/react@^19.2.4/",
+    "@xyflow/react": "https://esm.sh/@xyflow/react@^12.10.0",
+    "dagre": "https://esm.sh/dagre@^0.8.5"
+  }
+}
+</script>
+</head>
+  <body>
+    <div id="root"></div>
+  </body>
+</html>
